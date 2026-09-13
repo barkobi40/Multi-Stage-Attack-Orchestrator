@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import socket
+import struct
+
 import pytest
 
-from python_framework.client import DeviceClient, DeviceConnectionError
+from python_framework.client import DeviceClient, DeviceConnectionError, MsgType, StatusCode
 from python_framework.extractor import DataExtractor
 from python_framework.models import Attack, AttackStage
 from python_framework.orchestrator import AttackOrchestrator, StageStatus
@@ -65,6 +68,34 @@ class TestSuccessfulAttackRun:
 
         assert dest == tmp_path / "loot.bin"
         assert dest.read_bytes() == b"EXTRACTED_DEVICE_DATA_PAYLOAD"
+
+
+class TestProtocolFraming:
+    """Raw wire-protocol edge cases, bypassing DeviceClient's own guards."""
+
+    def test_oversized_read_file_path_does_not_desync_the_connection(self, simulator):
+        """A MSG_READ_FILE payload longer than the server's path buffer must
+        be fully drained, so a subsequent message on the same connection is
+        still framed correctly instead of being read as leftover bytes."""
+        oversized_path = b"a" * 300  # exceeds the server's 255-byte path buffer
+
+        with socket.create_connection(("localhost", simulator.port), timeout=5.0) as sock:
+            header = struct.pack(">BI", MsgType.READ_FILE, len(oversized_path))
+            sock.sendall(header + oversized_path)
+
+            resp_header = sock.recv(8, socket.MSG_WAITALL)
+            status, data_len = struct.unpack(">II", resp_header)
+            assert status == StatusCode.OK
+            data = sock.recv(data_len, socket.MSG_WAITALL)
+            assert data == b"EXTRACTED_DEVICE_DATA_PAYLOAD"
+
+            # If the oversized payload wasn't fully drained, these bytes
+            # would be misread as part of the next message and desync it.
+            sock.sendall(struct.pack(">BI", MsgType.GET_INFO, 0))
+            info_header = sock.recv(8, socket.MSG_WAITALL)
+            info_status, info_len = struct.unpack(">II", info_header)
+            assert info_status == StatusCode.OK
+            assert len(sock.recv(info_len, socket.MSG_WAITALL)) == info_len
 
 
 class TestStageFailureFaultInjection:

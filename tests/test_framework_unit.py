@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import struct
-from typing import Dict, List, Tuple, Union
 
 import pytest
 
@@ -91,6 +90,41 @@ class TestAttack:
         attack = Attack(stages=[_stage(3), _stage(1), _stage(2)])
         assert attack.stage_ids() == [3, 1, 2]
 
+    @pytest.mark.parametrize("min_battery_level", [-1, 101])
+    def test_rejects_out_of_range_min_battery_level(self, min_battery_level):
+        with pytest.raises(ValueError):
+            Attack(stages=[_stage(1)], min_battery_level=min_battery_level)
+
+    @pytest.mark.parametrize("success_probability", [-0.1, 1.1])
+    def test_rejects_out_of_range_success_probability(self, success_probability):
+        with pytest.raises(ValueError):
+            Attack(stages=[_stage(1)], success_probability=success_probability)
+
+    def test_is_compatible_rejects_low_battery(self):
+        attack = Attack(stages=[_stage(1)], min_battery_level=50)
+        low_battery = DeviceState(
+            ios_major=16, ios_minor=5, model="iPhone14,2", battery_level=20
+        )
+        assert attack.is_compatible(low_battery) is False
+
+    def test_is_compatible_accepts_sufficient_battery(self):
+        attack = Attack(stages=[_stage(1)], min_battery_level=50)
+        device = _device()
+        assert attack.is_compatible(device) is True
+
+    def test_is_compatible_enforces_model_allowlist(self):
+        attack = Attack(stages=[_stage(1)], compatible_models=("iPhone15,2",))
+        assert attack.is_compatible(_device()) is False
+
+        matching_model = DeviceState(
+            ios_major=16, ios_minor=5, model="iPhone15,2", battery_level=80
+        )
+        assert attack.is_compatible(matching_model) is True
+
+    def test_is_compatible_allows_any_model_by_default(self):
+        attack = Attack(stages=[_stage(1)])
+        assert attack.is_compatible(_device()) is True
+
 
 # ---------------------------------------------------------------------------
 # orchestrator.py
@@ -100,9 +134,9 @@ class TestAttack:
 class FakeDeviceClient:
     """Stands in for DeviceClient.execute_stage in orchestrator tests."""
 
-    def __init__(self, outcomes: Dict[int, Union[bool, Exception]]) -> None:
+    def __init__(self, outcomes: dict[int, bool | Exception]) -> None:
         self._outcomes = outcomes
-        self.calls: List[int] = []
+        self.calls: list[int] = []
 
     def execute_stage(self, stage_id: int) -> bool:
         self.calls.append(stage_id)
@@ -130,6 +164,47 @@ class TestSelectPlan:
 
         with pytest.raises(NoCompatiblePlanError):
             orchestrator.select_plan(device, [plan])
+
+    def test_selects_highest_probability_among_viable_plans(self):
+        device = _device()
+        risky = Attack(stages=[_stage(1)], success_probability=0.3)
+        safest = Attack(stages=[_stage(1)], success_probability=0.9)
+        moderate = Attack(stages=[_stage(1)], success_probability=0.6)
+        orchestrator = AttackOrchestrator(FakeDeviceClient({}))
+
+        selected = orchestrator.select_plan(device, [risky, safest, moderate])
+
+        assert selected is safest
+
+    def test_excludes_plans_the_device_battery_cannot_support(self):
+        device_low_battery = DeviceState(
+            ios_major=16, ios_minor=5, model="iPhone14,2", battery_level=10
+        )
+        needs_battery = Attack(
+            stages=[_stage(1)], min_battery_level=50, success_probability=0.9
+        )
+        low_power_ok = Attack(
+            stages=[_stage(1)], min_battery_level=0, success_probability=0.5
+        )
+        orchestrator = AttackOrchestrator(FakeDeviceClient({}))
+
+        selected = orchestrator.select_plan(
+            device_low_battery, [needs_battery, low_power_ok]
+        )
+
+        assert selected is low_power_ok
+
+    def test_excludes_plans_the_device_model_does_not_match(self):
+        device = _device()
+        wrong_model = Attack(
+            stages=[_stage(1)], compatible_models=("iPhone15,2",), success_probability=0.9
+        )
+        any_model = Attack(stages=[_stage(1)], success_probability=0.5)
+        orchestrator = AttackOrchestrator(FakeDeviceClient({}))
+
+        selected = orchestrator.select_plan(device, [wrong_model, any_model])
+
+        assert selected is any_model
 
 
 class TestRun:
@@ -183,6 +258,20 @@ class TestRun:
         with pytest.raises(OrchestratorError):
             AttackOrchestrator(client).run(plan, device=incompatible_device)
 
+    def test_run_rejects_device_with_insufficient_battery(self):
+        plan = Attack(stages=[_stage(1)], min_battery_level=90)
+        client = FakeDeviceClient({1: True})
+
+        with pytest.raises(OrchestratorError):
+            AttackOrchestrator(client).run(plan, device=_device())
+
+    def test_run_rejects_device_with_unsupported_model(self):
+        plan = Attack(stages=[_stage(1)], compatible_models=("iPhone15,2",))
+        client = FakeDeviceClient({1: True})
+
+        with pytest.raises(OrchestratorError):
+            AttackOrchestrator(client).run(plan, device=_device())
+
 
 # ---------------------------------------------------------------------------
 # extractor.py
@@ -192,7 +281,7 @@ class TestRun:
 class FakeReadClient:
     """Stands in for DeviceClient.read_device_file in extractor tests."""
 
-    def __init__(self, files: Dict[str, Union[bytes, Exception]]) -> None:
+    def __init__(self, files: dict[str, bytes | Exception]) -> None:
         self._files = files
 
     def read_device_file(self, path: str) -> bytes:
@@ -259,7 +348,7 @@ class FakeSocket:
 def client_with_socket(monkeypatch):
     """Factory fixture for DeviceClient using a FakeSocket."""
 
-    def _make(recv_buffer: bytes = b"") -> Tuple[DeviceClient, FakeSocket]:
+    def _make(recv_buffer: bytes = b"") -> tuple[DeviceClient, FakeSocket]:
         fake_socket = FakeSocket(recv_buffer)
         monkeypatch.setattr(
             "python_framework.client.socket.create_connection",

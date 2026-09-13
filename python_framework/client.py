@@ -10,6 +10,7 @@ import socket
 import struct
 from enum import IntEnum
 from types import TracebackType
+from typing import Protocol
 
 from .models import DeviceState
 
@@ -19,6 +20,27 @@ DEFAULT_TIMEOUT = 5.0
 
 # Maximum path length supported by the C server buffer
 MAX_PATH_LEN = 255
+
+
+class StageExecutor(Protocol):
+    """Structural interface for anything that can execute an attack stage.
+
+    `AttackOrchestrator` depends on this instead of the concrete
+    `DeviceClient` so test doubles (e.g. a mocked or scripted stand-in) are
+    valid substitutes without inheriting from `DeviceClient`.
+    """
+
+    def execute_stage(self, stage_id: int) -> bool: ...
+
+
+class FileReader(Protocol):
+    """Structural interface for anything that can read a file off a device.
+
+    `DataExtractor` depends on this instead of the concrete `DeviceClient`
+    for the same reason as `StageExecutor`.
+    """
+
+    def read_device_file(self, path: str) -> bytes: ...
 
 
 class MsgType(IntEnum):

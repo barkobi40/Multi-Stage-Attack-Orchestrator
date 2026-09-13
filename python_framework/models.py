@@ -5,7 +5,8 @@ Data classes representing device state and attack plans.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -49,11 +50,15 @@ class AttackStage:
             raise ValueError("stage_name must not be empty")
 
 
-@dataclass
+@dataclass(frozen=True)
 class Attack:
-    """An ordered sequence of attack stages with device-state requirements."""
+    """An immutable, ordered sequence of attack stages with device-state
+    requirements. Constructed once and never mutated afterwards, so its
+    validated invariants (unique stage IDs, sane bounds) always hold for
+    the lifetime of the instance.
+    """
 
-    stages: list[AttackStage] = field(default_factory=list)
+    stages: Sequence[AttackStage] = ()
     min_ios_version: tuple[int, int] = (0, 0)
     max_ios_version: tuple[int, int] = (999, 999)
     min_battery_level: int = 0
@@ -61,6 +66,9 @@ class Attack:
     success_probability: float = 1.0
 
     def __post_init__(self) -> None:
+        # Normalize to a tuple so `stages` can't be mutated after construction
+        # (e.g. via `.append()`) once validated below.
+        object.__setattr__(self, "stages", tuple(self.stages))
         if self.min_ios_version > self.max_ios_version:
             raise ValueError(
                 f"min_ios_version {self.min_ios_version} exceeds "

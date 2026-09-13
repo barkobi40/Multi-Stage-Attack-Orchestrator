@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .client import DeviceClient, DeviceConnectionError, DeviceProtocolError
+from .client import DeviceConnectionError, DeviceProtocolError, StageExecutor
 from .models import Attack, AttackStage, DeviceState
 
 
@@ -62,7 +62,7 @@ class AttackResult:
 class AttackOrchestrator:
     """Selects and runs attack plans against a target device."""
 
-    def __init__(self, client: DeviceClient) -> None:
+    def __init__(self, client: StageExecutor) -> None:
         """Initializes with an active device client."""
         self._client = client
 

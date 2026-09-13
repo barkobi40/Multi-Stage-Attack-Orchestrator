@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -12,6 +13,13 @@
 
 static int fail_at_stage = -1;
 static int disconnect_at_stage = -1;
+
+/* Bounds how long a single blocking recv() on a client connection will
+ * wait. Without this, a stalled or malicious client (e.g. one that declares
+ * a payload_len and never finishes sending it) would block this
+ * single-threaded, one-connection-at-a-time server forever, starving every
+ * other client. */
+static const struct timeval CLIENT_RECV_TIMEOUT = {.tv_sec = 5, .tv_usec = 0};
 
 /* Reads exactly `len` bytes into `buf`. Returns 1 on success, 0 if the
  * peer closed the connection or an error occurred before `len` bytes
@@ -209,6 +217,8 @@ int main(int argc, char *argv[]) {
     while (1) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd >= 0) {
+            setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO,
+                       &CLIENT_RECV_TIMEOUT, sizeof(CLIENT_RECV_TIMEOUT));
             handle_client(client_fd);
         }
     }

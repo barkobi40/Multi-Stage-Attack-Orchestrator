@@ -6,7 +6,7 @@ import logging
 from collections.abc import Iterable
 from pathlib import Path
 
-from .client import DeviceClient, DeviceConnectionError, DeviceProtocolError
+from .client import DeviceConnectionError, DeviceProtocolError, FileReader
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class ExtractionError(Exception):
 class DataExtractor:
     """Extracts files from a device and saves them locally."""
 
-    def __init__(self, client: DeviceClient, output_dir: str | Path) -> None:
+    def __init__(self, client: FileReader, output_dir: str | Path) -> None:
         """Sets up the extractor with an active client and target folder."""
         self._client = client
         self.output_dir = Path(output_dir)

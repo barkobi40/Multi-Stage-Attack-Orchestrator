@@ -97,6 +97,27 @@ class TestProtocolFraming:
             assert info_status == StatusCode.OK
             assert len(sock.recv(info_len, socket.MSG_WAITALL)) == info_len
 
+    def test_malformed_execute_stage_payload_returns_error_and_stays_in_sync(self, simulator):
+        """A MSG_EXECUTE_STAGE whose declared payload_len doesn't match the
+        1-byte stage id must be rejected with STATUS_ERROR (not guessed at),
+        and its declared bytes fully drained so later messages stay framed."""
+        bogus_payload = b"\x01\x02\x03"  # payload_len=3, not the expected 1
+
+        with socket.create_connection(("localhost", simulator.port), timeout=5.0) as sock:
+            header = struct.pack(">BI", MsgType.EXECUTE_STAGE, len(bogus_payload))
+            sock.sendall(header + bogus_payload)
+
+            resp_header = sock.recv(8, socket.MSG_WAITALL)
+            status, data_len = struct.unpack(">II", resp_header)
+            assert status == StatusCode.ERROR
+            assert data_len == 0
+
+            sock.sendall(struct.pack(">BI", MsgType.GET_INFO, 0))
+            info_header = sock.recv(8, socket.MSG_WAITALL)
+            info_status, info_len = struct.unpack(">II", info_header)
+            assert info_status == StatusCode.OK
+            assert len(sock.recv(info_len, socket.MSG_WAITALL)) == info_len
+
 
 class TestStageFailureFaultInjection:
     """Test simulator fault injection for stage failures."""

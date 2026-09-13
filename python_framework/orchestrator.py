@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Sequence
 
 from .client import DeviceClient, DeviceConnectionError, DeviceProtocolError
-from .models import DeviceState, AttackStage, Attack
+from .models import Attack, AttackStage, DeviceState
 
 
 class OrchestratorError(Exception):
@@ -33,7 +33,7 @@ class StageResult:
 
     stage: AttackStage
     status: StageStatus
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -41,7 +41,7 @@ class AttackResult:
     """The overall outcome of running an attack plan."""
 
     plan: Attack
-    stage_results: List[StageResult] = field(default_factory=list)
+    stage_results: list[StageResult] = field(default_factory=list)
 
     @property
     def succeeded(self) -> bool:
@@ -51,7 +51,7 @@ class AttackResult:
         )
 
     @property
-    def failed_stage(self) -> Optional[StageResult]:
+    def failed_stage(self) -> StageResult | None:
         """Returns the first failed or dropped stage, if any."""
         for result in self.stage_results:
             if result.status in (StageStatus.FAILED, StageStatus.DROPPED):
@@ -69,25 +69,35 @@ class AttackOrchestrator:
     def select_plan(
         self, device: DeviceState, plans: Sequence[Attack]
     ) -> Attack:
-        """Finds the first plan compatible with the device version."""
-        for plan in plans:
-            if plan.is_compatible(device):
-                return plan
-        raise NoCompatiblePlanError(
-            f"No attack plan supports iOS {device.ios_version_string}"
-        )
+        """Picks the most viable plan compatible with the device state.
+
+        A plan is viable when the device satisfies its iOS version, battery,
+        and model requirements (see `Attack.is_compatible`). When more than
+        one plan is viable, the one with the highest `success_probability`
+        wins; ties keep the order the plans were given in.
+        """
+        compatible = [plan for plan in plans if plan.is_compatible(device)]
+        if not compatible:
+            raise NoCompatiblePlanError(
+                f"No attack plan supports device iOS {device.ios_version_string}, "
+                f"model {device.model}, battery {device.battery_level}%"
+            )
+        return max(compatible, key=lambda plan: plan.success_probability)
 
     def run(
-        self, plan: Attack, device: Optional[DeviceState] = None
+        self, plan: Attack, device: DeviceState | None = None
     ) -> AttackResult:
         """Runs all stages in the plan sequentially."""
         if device is not None and not plan.is_compatible(device):
             raise OrchestratorError(
-                f"Device iOS {device.ios_version_string} is outside plan bounds "
-                f"{plan.min_ios_version}-{plan.max_ios_version}"
+                f"Device iOS {device.ios_version_string}, model {device.model}, "
+                f"battery {device.battery_level}% does not satisfy plan requirements "
+                f"(iOS {plan.min_ios_version}-{plan.max_ios_version}, "
+                f"min battery {plan.min_battery_level}%, "
+                f"models {plan.compatible_models or 'any'})"
             )
 
-        results: List[StageResult] = []
+        results: list[StageResult] = []
         stopped = False
 
         for stage in plan.stages:

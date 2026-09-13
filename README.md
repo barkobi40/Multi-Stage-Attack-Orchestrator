@@ -138,8 +138,11 @@ make typecheck  # mypy python_framework
 make demo       # build the simulator and run a full attack scenario end-to-end
 ```
 
-`demo.py` (invoked by `make demo`) builds `device_sim`, launches it, runs a
-multi-stage attack via `AttackOrchestrator`, extracts a file via
+`demo.py` (invoked by `make demo`) builds `device_sim`, launches it, fetches
+the device state, picks the best of several candidate `Attack` plans via
+`AttackOrchestrator.select_plan()` (excluding ones the device's battery or
+model can't satisfy, preferring the highest `success_probability` among the
+rest), runs the selected multi-stage attack, extracts a file via
 `DataExtractor`, and tears the simulator back down — a single command that
 exercises the whole stack.
 

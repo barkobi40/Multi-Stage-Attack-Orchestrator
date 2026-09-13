@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Union
 
 from .client import DeviceClient, DeviceConnectionError, DeviceProtocolError
 
@@ -18,13 +18,13 @@ class ExtractionError(Exception):
 class DataExtractor:
     """Extracts files from a device and saves them locally."""
 
-    def __init__(self, client: DeviceClient, output_dir: Union[str, Path]) -> None:
+    def __init__(self, client: DeviceClient, output_dir: str | Path) -> None:
         """Sets up the extractor with an active client and target folder."""
         self._client = client
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def extract_file(self, device_path: str, local_name: Optional[str] = None) -> Path:
+    def extract_file(self, device_path: str, local_name: str | None = None) -> Path:
         """Reads a single file from the device and saves it locally."""
         try:
             data = self._client.read_device_file(device_path)
@@ -37,9 +37,9 @@ class DataExtractor:
         logger.info("Extracted %d bytes from %s to %s", len(data), device_path, dest)
         return dest
 
-    def extract_files(self, device_paths: Iterable[str]) -> Dict[str, Path]:
+    def extract_files(self, device_paths: Iterable[str]) -> dict[str, Path]:
         """Extracts multiple files, skipping individual failures."""
-        results: Dict[str, Path] = {}
+        results: dict[str, Path] = {}
         for device_path in device_paths:
             try:
                 results[device_path] = self.extract_file(device_path)

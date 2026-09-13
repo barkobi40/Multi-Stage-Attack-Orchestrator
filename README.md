@@ -172,3 +172,4 @@ Both are configured in `pyproject.toml`.
 `.github/workflows/ci.yml` runs on every push and pull request to `main`: it
 lints with `ruff`, type-checks with `mypy`, builds the C simulator, and runs
 the full pytest suite across Python 3.9 and 3.11.
+

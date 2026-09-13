@@ -1,4 +1,4 @@
-"""Unit tests using in-memory fakes/mocks """
+"""Unit tests using in-memory fakes/mocks."""
 
 from __future__ import annotations
 

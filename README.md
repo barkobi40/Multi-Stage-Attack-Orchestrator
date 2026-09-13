@@ -6,49 +6,74 @@ A framework for orchestrating multi-stage simulated device interactions, combini
 
 ## Architecture & Components
 
-- **C Simulator (`c_simulator/`)**: A TCP server binary (`device_sim`) simulating target device behavior, supporting CLI fault injection (`--fail-stage`, `--drop-stage`).
-- **Python Package (`orchestrator/`)**:
-  - **`attacks/`**: Attack definitions (`attack.py`), a small preset registry (`catalog.py`), and plan-compatibility selection (`selector.py`).
-  - **`connection/`**: A shared `DeviceConnection` interface (`base.py`), the real TCP implementation (`tcp.py`), a scriptable in-memory implementation (`mock.py`), a backend factory (`provider.py`), and a context-manager convenience (`session.py`).
-  - **`models/`**: Device state (`device.py`).
-  - **`protocol.py`**: Pure binary encode/decode for the wire protocol (no socket I/O) — matches `c_simulator/protocol.h`.
-  - **`orchestrator.py`**: Sequential multi-stage execution and status tracking (Success, Failed, Skipped, Dropped).
-  - **`extractor.py`**: Reads files off a device connection and writes them to a local output directory.
-  - **`errors.py`**: The shared exception hierarchy.
+- **C Simulator (`c_simulator/`)**: A TCP server binary (`device_sim`) simulating target device behavior, supporting CLI fault injection (`--fail-stage`, `--drop-stage`). See [Wire Protocol](#wire-protocol) below for the binary framing it speaks.
+- **Python Framework (`python_framework/`)**:
+  - **`models.py`**: `DeviceState` (iOS version, model, battery) and `Attack`/`AttackStage`. An `Attack` declares the device state it needs — an iOS version range, a minimum battery level, and (optionally) a specific set of compatible device models — plus a `success_probability` used to rank it against other viable attacks.
+  - **`client.py`**: Binary packet framing/parsing via `struct`, TCP socket communication, and error handling (`DeviceConnectionError`, `DeviceProtocolError`).
+  - **`orchestrator.py`**: `AttackOrchestrator.select_plan()` filters candidate attacks down to those whose requirements the current `DeviceState` satisfies, then picks the highest-`success_probability` one among them (ties keep the given order). `run()` then executes the chosen plan's stages sequentially, tracking per-stage status (Success, Failed, Skipped, Dropped).
+  - **`extractor.py`**: Reads one or more files off the device and writes them to a local output directory (`extract_file` / `extract_files`).
 - **Test Suite (`tests/`)**:
-  - **`unit/`**: Fast, isolated tests against `MockConnection`/fakes — no sockets, no C build.
-  - **`integration/`**: End-to-end tests over real TCP sockets against the freshly compiled C simulator binary (fixtures in `integration/conftest.py`).
+  - **Unit Tests (`test_framework_unit.py`)**: Fast, isolated tests using in-memory mocks and fakes.
+  - **Integration Tests (`test_simulator_integration.py`)**: End-to-end tests over real TCP sockets against the freshly compiled C simulator binary (`conftest.py`), including raw wire-protocol edge cases (oversized payloads) that bypass the Python client's own guards.
 
-### Repo layout
+---
 
-```
-c_simulator/
-  protocol.h, main.c, Makefile, device_sim
+## Wire Protocol
 
-orchestrator/
-  __init__.py                Re-exports the public API
-  errors.py                  Shared exception hierarchy
-  protocol.py                Wire-format encode/decode (no I/O)
-  orchestrator.py            AttackOrchestrator: plan selection + sequential execution
-  extractor.py                DataExtractor: pulls files off a device connection
-  attacks/
-    attack.py                 Attack, AttackStage
-    catalog.py                 Reusable Attack presets
-    selector.py                 select_plan()
-  connection/
-    base.py                    DeviceConnection interface
-    tcp.py                      TCPConnection (real socket I/O)
-    mock.py                     MockConnection (scriptable in-memory fake)
-    provider.py                  get_connection() factory
-    session.py                   device_session() context manager
-  models/
-    device.py                  DeviceState
+`python_framework/client.py` and `c_simulator/protocol.h`/`main.c` implement the same binary, big-endian, length-prefixed protocol over a single persistent TCP connection. Every request and response starts with a fixed header; the client always initiates.
 
-tests/
-  conftest.py                 sys.path setup only
-  unit/                       No sockets, no C build required
-  integration/                Real device_sim subprocess (conftest.py here builds it)
-```
+### Request header (client → server)
+
+| Field         | Type     | Notes                              |
+|---------------|----------|-------------------------------------|
+| `msg_type`    | `uint8`  | One of the message types below      |
+| `payload_len` | `uint32` | Length in bytes of what follows     |
+
+Packed with `struct.pack(">BI", msg_type, len(payload))` on the Python side; `#pragma pack(push, 1)` on the C side.
+
+### Message types
+
+| Value  | Name              | Request payload                          | Response payload                         |
+|--------|-------------------|-------------------------------------------|--------------------------------------------|
+| `0x01` | `MSG_GET_INFO`    | none (`payload_len` must be `0`)          | `DeviceInfoPayload`                        |
+| `0x02` | `MSG_EXECUTE_STAGE` | `ExecuteStagePayload` (`uint8 stage_id`) | none                                        |
+| `0x03` | `MSG_READ_FILE`   | UTF-8 device path, up to 255 bytes        | raw file bytes                             |
+| `0x04` | `MSG_RESPONSE`    | *(reserved — never sent by the client)*   | —                                           |
+
+`DeviceInfoPayload` (37 bytes, packed):
+
+| Field                | Type      |
+|----------------------|-----------|
+| `battery_level`      | `uint8`   |
+| `ios_version_major`  | `uint16`  |
+| `ios_version_minor`  | `uint16`  |
+| `model`              | `char[32]`, NUL-padded |
+
+### Response header (server → client)
+
+Every response — regardless of which request it answers — starts with:
+
+| Field       | Type     | Notes                                   |
+|-------------|----------|-------------------------------------------|
+| `status`    | `uint32` | One of the status codes below             |
+| `data_len`  | `uint32` | Length in bytes of the payload that follows (`0` for `MSG_EXECUTE_STAGE`) |
+
+followed by exactly `data_len` bytes of payload (device info, file bytes, or nothing).
+
+### Status codes
+
+| Value | Name                    | Meaning                                                    |
+|-------|-------------------------|--------------------------------------------------------------|
+| `0`   | `STATUS_OK`             | Request succeeded                                             |
+| `1`   | `STATUS_STAGE_FAILED`   | `MSG_EXECUTE_STAGE` ran but the stage did not succeed         |
+| `2`   | `STATUS_FILE_NOT_FOUND` | Reserved for `MSG_READ_FILE`; the current simulator always returns dummy file data instead, so this status is currently only exercised by mocked unit tests, never by the real binary |
+| `99`  | `STATUS_ERROR`          | Malformed request (e.g. wrong `payload_len` for the message type) |
+
+### Error scenarios
+
+- **Dropped connection mid-chain** (`device_sim --drop-stage N`): the server closes the socket instead of responding to `MSG_EXECUTE_STAGE` for stage `N`. The client surfaces this as `DeviceConnectionError`, and `AttackOrchestrator.run()` marks that stage `DROPPED` and skips the remaining stages.
+- **Stage failure** (`device_sim --fail-stage N`): the server responds normally with `STATUS_STAGE_FAILED` for stage `N`. `execute_stage()` returns `False`, and `run()` marks the stage `FAILED` and skips the rest.
+- **Malformed payload length**: every handler drains exactly the `payload_len` it was told to expect — even when it's larger than the handler needs (e.g. an over-long `MSG_READ_FILE` path, or a `MSG_GET_INFO`/`MSG_EXECUTE_STAGE` payload that doesn't match the expected size) — so a non-conforming request can't desync the framing of the next message on the same connection. `MSG_EXECUTE_STAGE` responds `STATUS_ERROR` when `payload_len` doesn't match the expected 1-byte stage id.
 
 ---
 
@@ -93,12 +118,12 @@ make
 cd ..
 ```
 
-### 2. Run Tests
+### 2. Run All Tests
+
+Execute the entire test suite (both unit tests and real C-simulator integration tests) using pytest:
 
 ```bash
-pytest tests/ -v                 # everything
-pytest tests/unit/ -v            # fast, no C build or sockets
-pytest tests/integration/ -v     # against the real simulator
+pytest tests/ -v
 ```
 
 ### 3. One-Command Shortcuts
@@ -106,42 +131,17 @@ pytest tests/integration/ -v     # against the real simulator
 A top-level `Makefile` wraps the common commands:
 
 ```bash
-make build            # clean rebuild of the C simulator
-make test             # pytest tests/ -v
-make test-unit        # pytest tests/unit/ -v
-make test-integration # pytest tests/integration/ -v
-make lint             # ruff check .
-make typecheck        # mypy orchestrator
-make demo             # build the simulator and run a full attack scenario end-to-end
+make build      # clean rebuild of the C simulator
+make test       # pytest tests/ -v
+make lint       # ruff check .
+make typecheck  # mypy python_framework
+make demo       # build the simulator and run a full attack scenario end-to-end
 ```
 
 `demo.py` (invoked by `make demo`) builds `device_sim`, launches it, runs a
-multi-stage attack via `AttackOrchestrator` (using the `"basic-three-stage"`
-preset from `orchestrator.attacks.catalog`), extracts a file via
+multi-stage attack via `AttackOrchestrator`, extracts a file via
 `DataExtractor`, and tears the simulator back down — a single command that
 exercises the whole stack.
-
-### Usage example
-
-```python
-from orchestrator import CATALOG, AttackOrchestrator, DataExtractor, TCPConnection
-
-with TCPConnection(host="localhost", port=8888) as connection:
-    device = connection.get_device_info()
-
-    plan = CATALOG["basic-three-stage"]
-    orchestrator = AttackOrchestrator(connection)
-    selected = orchestrator.select_plan(device, [plan])
-    result = orchestrator.run(selected, device=device)
-
-    if result.succeeded:
-        DataExtractor(connection, "./extracted").extract_file("/var/mobile/some_file")
-```
-
-Swap `TCPConnection` for `orchestrator.MockConnection` (or
-`orchestrator.get_connection("mock", ...)`) to run the same code offline,
-without a compiled simulator — both implement the same `DeviceConnection`
-interface.
 
 ---
 
@@ -156,8 +156,8 @@ pip install ruff mypy
 Then:
 
 ```bash
-ruff check .          # lint
-mypy orchestrator     # static type checking
+ruff check .              # lint
+mypy python_framework     # static type checking
 ```
 
 Both are configured in `pyproject.toml`.

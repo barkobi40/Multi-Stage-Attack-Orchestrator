@@ -15,7 +15,7 @@ class OrchestratorError(Exception):
 
 
 class NoCompatiblePlanError(OrchestratorError):
-    """Raised when no attack plan supports the device version."""
+    """Raised when no attack plan's device-state requirements are met."""
 
 
 class StageStatus(Enum):

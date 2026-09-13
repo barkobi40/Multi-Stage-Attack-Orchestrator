@@ -10,7 +10,6 @@ import socket
 import struct
 from enum import IntEnum
 from types import TracebackType
-from typing import Optional, Tuple, Type
 
 from .models import DeviceState
 
@@ -70,7 +69,7 @@ class DeviceClient:
         self.host = host
         self.port = port
         self.timeout = timeout
-        self._sock: Optional[socket.socket] = None
+        self._sock: socket.socket | None = None
         self._connect()
 
     def _connect(self) -> None:
@@ -96,14 +95,14 @@ class DeviceClient:
             finally:
                 self._sock = None
 
-    def __enter__(self) -> "DeviceClient":
+    def __enter__(self) -> DeviceClient:
         return self
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> None:
         self.close()
 
@@ -140,7 +139,7 @@ class DeviceClient:
             chunks.extend(chunk)
         return bytes(chunks)
 
-    def _recv_response_header(self) -> Tuple[StatusCode, int]:
+    def _recv_response_header(self) -> tuple[StatusCode, int]:
         """Reads and parses the response header."""
         raw = self._recv_exact(struct.calcsize(self._RESPONSE_HEADER_FORMAT))
         status, data_len = struct.unpack(self._RESPONSE_HEADER_FORMAT, raw)

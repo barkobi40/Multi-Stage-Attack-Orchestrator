@@ -69,13 +69,7 @@ class AttackOrchestrator:
     def select_plan(
         self, device: DeviceState, plans: Sequence[Attack]
     ) -> Attack:
-        """Picks the most viable plan compatible with the device state.
-
-        A plan is viable when the device satisfies its iOS version, battery,
-        and model requirements (see `Attack.is_compatible`). When more than
-        one plan is viable, the one with the highest `success_probability`
-        wins; ties keep the order the plans were given in.
-        """
+        """Picks the highest-success_probability plan compatible with the device."""
         compatible = [plan for plan in plans if plan.is_compatible(device)]
         if not compatible:
             raise NoCompatiblePlanError(

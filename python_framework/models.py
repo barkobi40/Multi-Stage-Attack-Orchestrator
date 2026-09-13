@@ -52,11 +52,7 @@ class AttackStage:
 
 @dataclass(frozen=True)
 class Attack:
-    """An immutable, ordered sequence of attack stages with device-state
-    requirements. Constructed once and never mutated afterwards, so its
-    validated invariants (unique stage IDs, sane bounds) always hold for
-    the lifetime of the instance.
-    """
+    """An immutable, ordered sequence of attack stages with device-state requirements."""
 
     stages: Sequence[AttackStage] = ()
     min_ios_version: tuple[int, int] = (0, 0)
@@ -66,8 +62,7 @@ class Attack:
     success_probability: float = 1.0
 
     def __post_init__(self) -> None:
-        # Normalize to a tuple so `stages` can't be mutated after construction
-        # (e.g. via `.append()`) once validated below.
+        # Freeze stages into a tuple so it can't be mutated later.
         object.__setattr__(self, "stages", tuple(self.stages))
         if self.min_ios_version > self.max_ios_version:
             raise ValueError(
@@ -87,11 +82,7 @@ class Attack:
             )
 
     def is_compatible(self, device: DeviceState) -> bool:
-        """Checks if the device state satisfies this attack's requirements.
-
-        Validates iOS version bounds, minimum battery level, and (when
-        restricted) the device model.
-        """
+        """Checks iOS version, battery, and (if restricted) model requirements."""
         if not self.min_ios_version <= device.ios_version <= self.max_ios_version:
             return False
         if device.battery_level < self.min_battery_level:

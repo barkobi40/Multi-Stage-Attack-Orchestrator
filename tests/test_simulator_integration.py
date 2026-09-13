@@ -74,10 +74,8 @@ class TestProtocolFraming:
     """Raw wire-protocol edge cases, bypassing DeviceClient's own guards."""
 
     def test_oversized_read_file_path_does_not_desync_the_connection(self, simulator):
-        """A MSG_READ_FILE payload longer than the server's path buffer must
-        be fully drained, so a subsequent message on the same connection is
-        still framed correctly instead of being read as leftover bytes."""
-        oversized_path = b"a" * 300  # exceeds the server's 255-byte path buffer
+        """An over-long MSG_READ_FILE path must not desync later messages."""
+        oversized_path = b"a" * 300  # exceeds the 255-byte path buffer
 
         with socket.create_connection(("localhost", simulator.port), timeout=5.0) as sock:
             header = struct.pack(">BI", MsgType.READ_FILE, len(oversized_path))
@@ -89,8 +87,7 @@ class TestProtocolFraming:
             data = sock.recv(data_len, socket.MSG_WAITALL)
             assert data == b"EXTRACTED_DEVICE_DATA_PAYLOAD"
 
-            # If the oversized payload wasn't fully drained, these bytes
-            # would be misread as part of the next message and desync it.
+            # Confirms the connection is still framed correctly.
             sock.sendall(struct.pack(">BI", MsgType.GET_INFO, 0))
             info_header = sock.recv(8, socket.MSG_WAITALL)
             info_status, info_len = struct.unpack(">II", info_header)
@@ -98,9 +95,7 @@ class TestProtocolFraming:
             assert len(sock.recv(info_len, socket.MSG_WAITALL)) == info_len
 
     def test_malformed_execute_stage_payload_returns_error_and_stays_in_sync(self, simulator):
-        """A MSG_EXECUTE_STAGE whose declared payload_len doesn't match the
-        1-byte stage id must be rejected with STATUS_ERROR (not guessed at),
-        and its declared bytes fully drained so later messages stay framed."""
+        """A bad EXECUTE_STAGE payload_len should error, not desync the connection."""
         bogus_payload = b"\x01\x02\x03"  # payload_len=3, not the expected 1
 
         with socket.create_connection(("localhost", simulator.port), timeout=5.0) as sock:

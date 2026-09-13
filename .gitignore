@@ -3,3 +3,7 @@
 __pycache__/
 *.o
 c_simulator/device_sim
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.DS_Store

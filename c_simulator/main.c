@@ -14,16 +14,10 @@
 static int fail_at_stage = -1;
 static int disconnect_at_stage = -1;
 
-/* Bounds how long a single blocking recv() on a client connection will
- * wait. Without this, a stalled or malicious client (e.g. one that declares
- * a payload_len and never finishes sending it) would block this
- * single-threaded, one-connection-at-a-time server forever, starving every
- * other client. */
+/* Caps how long a stalled client can block this single-threaded server. */
 static const struct timeval CLIENT_RECV_TIMEOUT = {.tv_sec = 5, .tv_usec = 0};
 
-/* Reads exactly `len` bytes into `buf`. Returns 1 on success, 0 if the
- * peer closed the connection or an error occurred before `len` bytes
- * were received. */
+/* Reads exactly `len` bytes. Returns 1 on success, 0 on error/disconnect. */
 static int recv_exact(int fd, void *buf, size_t len) {
     if (len == 0) {
         return 1;
@@ -32,12 +26,7 @@ static int recv_exact(int fd, void *buf, size_t len) {
     return n == (ssize_t)len;
 }
 
-/* Reads and discards exactly `len` bytes. Used to keep the connection's
- * message framing in sync when a payload is longer than what the handler
- * actually needs (e.g. a MSG_READ_FILE path exceeding the path buffer) -
- * without this, the unread trailing bytes would be misinterpreted as the
- * start of the next message. Returns 1 on success, 0 on a dropped
- * connection or error. */
+/* Reads and discards `len` bytes, to keep framing in sync with the wire. */
 static int drain_exact(int fd, size_t len) {
     char scratch[256];
     while (len > 0) {
@@ -58,8 +47,7 @@ static void handle_client(int client_fd) {
 
         switch (hdr.msg_type) {
         case MSG_GET_INFO: {
-            /* GET_INFO takes no payload; drain any declared bytes anyway so
-             * a non-conforming client can't desync the next message header. */
+            /* No payload expected, but drain any declared anyway. */
             if (!drain_exact(client_fd, hdr.payload_len)) {
                 close(client_fd);
                 return;
@@ -83,8 +71,7 @@ static void handle_client(int client_fd) {
 
         case MSG_EXECUTE_STAGE: {
             if (hdr.payload_len != sizeof(ExecuteStagePayload)) {
-                /* Malformed request: drain what was declared to stay in
-                 * sync, then report the error instead of guessing. */
+                /* Malformed length: drain it and report an error. */
                 if (!drain_exact(client_fd, hdr.payload_len)) {
                     close(client_fd);
                     return;
@@ -130,9 +117,7 @@ static void handle_client(int client_fd) {
                 close(client_fd);
                 return;
             }
-            /* A path longer than the buffer still has its remaining
-             * declared bytes sitting on the wire; drain them so the next
-             * message header isn't read out of sync. */
+            /* Drain any part of the path that didn't fit in the buffer. */
             if (!drain_exact(client_fd, hdr.payload_len - to_read)) {
                 close(client_fd);
                 return;
@@ -174,9 +159,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* A dropped connection (--drop-stage) makes a subsequent send() raise
-     * SIGPIPE; ignore it so the write just fails with EPIPE instead of
-     * killing the process. */
+    /* Ignore SIGPIPE so writing to a dropped connection fails, not crashes. */
     signal(SIGPIPE, SIG_IGN);
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);

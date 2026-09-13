@@ -23,22 +23,13 @@ MAX_PATH_LEN = 255
 
 
 class StageExecutor(Protocol):
-    """Structural interface for anything that can execute an attack stage.
-
-    `AttackOrchestrator` depends on this instead of the concrete
-    `DeviceClient` so test doubles (e.g. a mocked or scripted stand-in) are
-    valid substitutes without inheriting from `DeviceClient`.
-    """
+    """Minimal interface AttackOrchestrator needs from a device client."""
 
     def execute_stage(self, stage_id: int) -> bool: ...
 
 
 class FileReader(Protocol):
-    """Structural interface for anything that can read a file off a device.
-
-    `DataExtractor` depends on this instead of the concrete `DeviceClient`
-    for the same reason as `StageExecutor`.
-    """
+    """Minimal interface DataExtractor needs from a device client."""
 
     def read_device_file(self, path: str) -> bytes: ...
 
